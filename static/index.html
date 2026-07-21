@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>마이 헬스 로그</title>
+</head>
+<body>
+  <h1>마이 헬스 로그</h1>
+
+  <h2>기록 입력</h2>
+  <form id="record-form">
+    <input name="user" placeholder="사용자" required />
+    <input name="date" type="date" required />
+    <input name="weight" type="number" step="0.1" placeholder="몸무게(kg)" required />
+    <input name="height" type="number" step="0.1" placeholder="키(cm)" required />
+    <input name="systolic" type="number" placeholder="수축기" required />
+    <input name="diastolic" type="number" placeholder="이완기" required />
+    <input name="blood_sugar" type="number" placeholder="혈당" required />
+    <input name="steps" type="number" placeholder="걸음 수" />
+    <input name="sleep_hours" type="number" step="0.1" placeholder="수면 시간" />
+    <input name="memo" placeholder="메모" />
+    <button type="submit">등록</button>
+  </form>
+
+  <h2>기록 조회</h2>
+  <input id="user-filter" placeholder="사용자로 조회" />
+  <button id="search-btn">조회</button>
+  <table id="record-table" border="1">
+    <thead>
+      <tr>
+        <th>날짜</th><th>체중</th><th>BMI</th><th>BMI분류</th>
+        <th>혈압분류</th><th>혈당분류</th><th>경고</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

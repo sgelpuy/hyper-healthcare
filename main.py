@@ -1,8 +1,18 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+import json
 from datetime import date, timedelta
+from pathlib import Path
 
-app = FastAPI()
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from fastapi.responses import HTMLResponse
+
+from fastapi.staticfiles import StaticFiles
+
+app = FastAPI(title="마이 헬스 로그 API", version="1.0")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ---------- 데이터 모델 ----------
 
 class RecordIn(BaseModel):
     user: str
@@ -16,18 +26,47 @@ class RecordIn(BaseModel):
     sleep_hours: float = 0.0
     memo: str = ""
 
-records = []
+
+class GoalIn(BaseModel):
+    user: str
+    target_weight: float | None = None
+    target_systolic: int | None = None
+    target_diastolic: int | None = None
+
+
+# ---------- 저장소 ----------
+
+records: list[dict] = []
 next_id = 1
+goals: dict[str, dict] = {}
+
+DATA_FILE = Path("data.json")
+
+
+def save_records():
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump({"records": records, "next_id": next_id}, f, ensure_ascii=False, indent=2)
+
+
+def load_records():
+    global records, next_id
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            records = data.get("records", [])
+            next_id = data.get("next_id", 1)
+
+
+load_records()  # 서버 시작 시 파일에서 복원
 
 
 # ---------- 헬스케어 계산 로직 ----------
- 
- 
+
 def calculate_bmi(weight: float, height: float) -> float:
     height_m = height / 100
     return round(weight / (height_m ** 2), 1)
- 
- 
+
+
 def classify_bmi(bmi: float) -> str:
     if bmi < 18.5:
         return "저체중"
@@ -37,8 +76,8 @@ def classify_bmi(bmi: float) -> str:
         return "과체중"
     else:
         return "비만"
- 
- 
+
+
 def classify_bp(systolic: int, diastolic: int) -> str:
     if systolic >= 140 or diastolic >= 90:
         return "고혈압"
@@ -46,8 +85,8 @@ def classify_bp(systolic: int, diastolic: int) -> str:
         return "주의"
     else:
         return "정상"
- 
- 
+
+
 def classify_sugar(blood_sugar: int) -> str:
     if blood_sugar >= 126:
         return "당뇨 의심"
@@ -55,28 +94,26 @@ def classify_sugar(blood_sugar: int) -> str:
         return "공복혈당장애"
     else:
         return "정상"
- 
- 
+
+
 def classify_steps(steps: int) -> str:
-    # 기준: 5,000 미만 부족 / 5,000~9,999 적정 / 10,000 이상 우수
     if steps < 5000:
         return "부족"
     elif steps < 10000:
         return "적정"
     else:
         return "우수"
- 
- 
+
+
 def classify_sleep(sleep_hours: float) -> str:
-    # 기준: 6시간 미만 부족 / 6~9시간 적정 / 9시간 초과 과다
     if sleep_hours < 6:
         return "부족"
     elif sleep_hours <= 9:
         return "적정"
     else:
         return "과다"
- 
- 
+
+
 def generate_warnings(bmi_category: str, bp_category: str, sugar_category: str) -> list[str]:
     warnings = []
     if bmi_category == "비만":
@@ -86,15 +123,15 @@ def generate_warnings(bmi_category: str, bp_category: str, sugar_category: str) 
     if sugar_category == "당뇨 의심":
         warnings.append("혈당이 당뇨 의심 범위입니다.")
     return warnings
- 
- 
+
+
 def enrich(record: dict) -> dict:
     """저장된 원본 기록에 계산 필드를 붙여서 반환"""
     bmi = calculate_bmi(record["weight"], record["height"])
     bmi_category = classify_bmi(bmi)
     bp_category = classify_bp(record["systolic"], record["diastolic"])
     sugar_category = classify_sugar(record["blood_sugar"])
- 
+
     return {
         **record,
         "bmi": bmi,
@@ -105,16 +142,17 @@ def enrich(record: dict) -> dict:
         "sleep_category": classify_sleep(record["sleep_hours"]),
         "warnings": generate_warnings(bmi_category, bp_category, sugar_category),
     }
- 
- 
-# ---------- 엔드포인트 ----------
- 
+
+
+# ---------- 기본 ----------
 
 @app.get("/")
 def read_root():
-    return {"message": "hyper-healty API"}
- 
- 
+    return {"message": "마이 헬스 로그 API"}
+
+
+# ---------- 기록 CRUD ----------
+
 @app.post("/records")
 def create_record(record: RecordIn):
     global next_id
@@ -122,25 +160,26 @@ def create_record(record: RecordIn):
     new_record["id"] = next_id
     next_id += 1
     records.append(new_record)
-    return new_record
- 
- 
+    save_records()
+    return enrich(new_record)
+
+
 @app.get("/records")
 def list_records(user: str | None = None):
+    target = records
     if user is not None:
-        filtered = [r for r in records if r["user"] == user]
-        return {"count": len(filtered), "records": filtered}
-    return {"count": len(records), "records": records}
- 
- 
+        target = [r for r in records if r["user"] == user]
+    return {"count": len(target), "records": [enrich(r) for r in target]}
+
+
 @app.get("/records/{record_id}")
 def get_record(record_id: int):
     for r in records:
         if r["id"] == record_id:
-            return r
+            return enrich(r)
     raise HTTPException(status_code=404, detail="record not found")
- 
- 
+
+
 @app.put("/records/{record_id}")
 def update_record(record_id: int, record: RecordIn):
     for i, r in enumerate(records):
@@ -148,18 +187,22 @@ def update_record(record_id: int, record: RecordIn):
             updated = record.model_dump()
             updated["id"] = record_id
             records[i] = updated
+            save_records()
             return enrich(updated)
     raise HTTPException(status_code=404, detail="record not found")
- 
- 
+
+
 @app.delete("/records/{record_id}")
 def delete_record(record_id: int):
     for i, r in enumerate(records):
         if r["id"] == record_id:
             deleted = records.pop(i)
-            return {"deleted": deleted}
+            save_records()
+            return {"deleted": enrich(deleted)}
     raise HTTPException(status_code=404, detail="record not found")
 
+
+# ---------- 검색 · 통계 · 주간 리포트 ----------
 
 @app.get("/search")
 def search_records(start: str, end: str, user: str | None = None):
@@ -188,8 +231,8 @@ def get_stats(user: str | None = None):
         "avg_steps": round(sum(r["steps"] for r in target) / count, 1),
         "avg_sleep_hours": round(sum(r["sleep_hours"] for r in target) / count, 1),
     }
-    
-    
+
+
 @app.get("/weekly-report")
 def weekly_report(user: str):
     today = date.today()
@@ -206,7 +249,11 @@ def weekly_report(user: str):
 
     this_week_avg = avg_weight_in_range(this_week_start, today)
     last_week_avg = avg_weight_in_range(last_week_start, last_week_end)
-    change = round(this_week_avg - last_week_avg, 1) if this_week_avg is not None and last_week_avg is not None else None
+    change = (
+        round(this_week_avg - last_week_avg, 1)
+        if this_week_avg is not None and last_week_avg is not None
+        else None
+    )
 
     return {
         "user": user,
@@ -214,3 +261,64 @@ def weekly_report(user: str):
         "last_week_avg_weight": last_week_avg,
         "change": change,
     }
+
+
+# ---------- 목표 관리 ----------
+
+@app.post("/goals")
+def set_goal(goal: GoalIn):
+    goals[goal.user] = goal.model_dump()
+    return goals[goal.user]
+
+
+@app.get("/goals/{user}")
+def get_goal(user: str):
+    if user not in goals:
+        raise HTTPException(status_code=404, detail="goal not found")
+    return goals[user]
+
+
+@app.get("/goals/{user}/progress")
+def get_goal_progress(user: str):
+    if user not in goals:
+        raise HTTPException(status_code=404, detail="goal not found")
+
+    goal = goals[user]
+    user_records = [r for r in records if r["user"] == user]
+    if not user_records:
+        return {"user": user, "message": "기록이 없어 달성률을 계산할 수 없습니다."}
+
+    sorted_records = sorted(user_records, key=lambda r: r["date"])
+    first_weight = sorted_records[0]["weight"]
+    latest = sorted_records[-1]
+
+    result = {"user": user}
+
+    if goal.get("target_weight") is not None:
+        target = goal["target_weight"]
+        current = latest["weight"]
+        if first_weight == target:
+            rate = 100.0
+        else:
+            rate = (first_weight - current) / (first_weight - target) * 100
+            rate = max(0.0, min(100.0, round(rate, 1)))
+        result["weight_progress_pct"] = rate
+        result["current_weight"] = current
+        result["target_weight"] = target
+
+    if goal.get("target_systolic") is not None and goal.get("target_diastolic") is not None:
+        achieved = (
+            latest["systolic"] <= goal["target_systolic"]
+            and latest["diastolic"] <= goal["target_diastolic"]
+        )
+        result["bp_achieved"] = achieved
+        result["current_bp"] = f'{latest["systolic"]}/{latest["diastolic"]}'
+        result["target_bp"] = f'{goal["target_systolic"]}/{goal["target_diastolic"]}'
+
+    return result
+
+
+@app.get("/web", response_class=HTMLResponse)
+def web_page():
+    with open("static/index.html", encoding="utf-8") as f:
+        return f.read()
