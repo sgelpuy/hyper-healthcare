@@ -2,38 +2,105 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>마이 헬스 로그</title>
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <h1>마이 헬스 로그</h1>
+  <header>
+    <h1>마이 헬스 로그</h1>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="input">기록 입력</button>
+      <button class="tab-btn" data-tab="list">기록 조회</button>
+      <button class="tab-btn" data-tab="search">기간 검색</button>
+      <button class="tab-btn" data-tab="stats">통계</button>
+      <button class="tab-btn" data-tab="weekly">주간 리포트</button>
+      <button class="tab-btn" data-tab="goals">목표 관리</button>
+    </nav>
+  </header>
 
-  <h2>기록 입력</h2>
-  <form id="record-form">
-    <input name="user" placeholder="사용자" required />
-    <input name="date" type="date" required />
-    <input name="weight" type="number" step="0.1" placeholder="몸무게(kg)" required />
-    <input name="height" type="number" step="0.1" placeholder="키(cm)" required />
-    <input name="systolic" type="number" placeholder="수축기" required />
-    <input name="diastolic" type="number" placeholder="이완기" required />
-    <input name="blood_sugar" type="number" placeholder="혈당" required />
-    <input name="steps" type="number" placeholder="걸음 수" />
-    <input name="sleep_hours" type="number" step="0.1" placeholder="수면 시간" />
-    <input name="memo" placeholder="메모" />
-    <button type="submit">등록</button>
-  </form>
+  <main>
+    <!-- 기록 입력 -->
+    <section id="panel-input" class="panel active">
+      <h2 id="input-title">기록 입력</h2>
+      <form id="record-form" class="inline-form">
+        <div class="field"><label>사용자</label><input name="user" required /></div>
+        <div class="field"><label>날짜</label><input name="date" type="date" required /></div>
+        <div class="field"><label>몸무게(kg)</label><input name="weight" type="number" step="0.1" required /></div>
+        <div class="field"><label>키(cm)</label><input name="height" type="number" step="0.1" required /></div>
+        <div class="field"><label>수축기</label><input name="systolic" type="number" required /></div>
+        <div class="field"><label>이완기</label><input name="diastolic" type="number" required /></div>
+        <div class="field"><label>혈당</label><input name="blood_sugar" type="number" required /></div>
+        <div class="field"><label>걸음 수</label><input name="steps" type="number" /></div>
+        <div class="field"><label>수면 시간</label><input name="sleep_hours" type="number" step="0.1" /></div>
+        <div class="field"><label>메모</label><input name="memo" /></div>
+        <button type="submit" id="record-submit-btn">등록</button>
+        <button type="button" id="record-cancel-btn" class="secondary" style="display:none;">수정 취소</button>
+      </form>
+    </section>
 
-  <h2>기록 조회</h2>
-  <input id="user-filter" placeholder="사용자로 조회" />
-  <button id="search-btn">조회</button>
-  <table id="record-table" border="1">
-    <thead>
-      <tr>
-        <th>날짜</th><th>체중</th><th>BMI</th><th>BMI분류</th>
-        <th>혈압분류</th><th>혈당분류</th><th>경고</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+    <!-- 기록 조회 -->
+    <section id="panel-list" class="panel">
+      <h2>기록 조회</h2>
+      <form class="inline-form" id="list-form">
+        <div class="field"><label>사용자 (비우면 전체)</label><input id="list-user" /></div>
+        <button type="submit">조회</button>
+      </form>
+      <div id="list-result"></div>
+    </section>
+
+    <!-- 기간 검색 -->
+    <section id="panel-search" class="panel">
+      <h2>기간 검색</h2>
+      <form class="inline-form" id="search-form">
+        <div class="field"><label>시작일</label><input id="search-start" type="date" required /></div>
+        <div class="field"><label>종료일</label><input id="search-end" type="date" required /></div>
+        <div class="field"><label>사용자 (비우면 전체)</label><input id="search-user" /></div>
+        <button type="submit">검색</button>
+      </form>
+      <div id="search-result"></div>
+    </section>
+
+    <!-- 통계 -->
+    <section id="panel-stats" class="panel">
+      <h2>통계</h2>
+      <form class="inline-form" id="stats-form">
+        <div class="field"><label>사용자 (비우면 전체)</label><input id="stats-user" /></div>
+        <button type="submit">조회</button>
+      </form>
+      <div id="stats-result"></div>
+    </section>
+
+    <!-- 주간 리포트 -->
+    <section id="panel-weekly" class="panel">
+      <h2>주간 리포트</h2>
+      <form class="inline-form" id="weekly-form">
+        <div class="field"><label>사용자</label><input id="weekly-user" required /></div>
+        <button type="submit">조회</button>
+      </form>
+      <div id="weekly-result"></div>
+    </section>
+
+    <!-- 목표 관리 -->
+    <section id="panel-goals" class="panel">
+      <h2>목표 설정</h2>
+      <form class="inline-form" id="goal-form">
+        <div class="field"><label>사용자</label><input name="user" required /></div>
+        <div class="field"><label>목표 체중(kg)</label><input name="target_weight" type="number" step="0.1" /></div>
+        <div class="field"><label>목표 수축기</label><input name="target_systolic" type="number" /></div>
+        <div class="field"><label>목표 이완기</label><input name="target_diastolic" type="number" /></div>
+        <button type="submit">목표 저장</button>
+      </form>
+      <div id="goal-save-result" class="hint"></div>
+
+      <h2>달성률 조회</h2>
+      <form class="inline-form" id="goal-progress-form">
+        <div class="field"><label>사용자</label><input id="goal-progress-user" required /></div>
+        <button type="submit">조회</button>
+      </form>
+      <div id="goal-progress-result"></div>
+    </section>
+  </main>
 
   <script src="/static/app.js"></script>
 </body>

@@ -45,16 +45,22 @@ DATA_FILE = Path("data.json")
 
 def save_records():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump({"records": records, "next_id": next_id}, f, ensure_ascii=False, indent=2)
+        json.dump(
+            {"records": records, "next_id": next_id, "goals": goals},
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 def load_records():
-    global records, next_id
+    global records, next_id, goals
     if DATA_FILE.exists():
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             records = data.get("records", [])
             next_id = data.get("next_id", 1)
+            goals = data.get("goals", {})
 
 
 load_records()  # 서버 시작 시 파일에서 복원
@@ -268,6 +274,7 @@ def weekly_report(user: str):
 @app.post("/goals")
 def set_goal(goal: GoalIn):
     goals[goal.user] = goal.model_dump()
+    save_records()
     return goals[goal.user]
 
 
