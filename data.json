@@ -1,0 +1,31 @@
+{
+  "records": [
+    {
+      "user": "한승우",
+      "date": "2026-07-21",
+      "weight": 80.0,
+      "height": 176.0,
+      "systolic": 120,
+      "diastolic": 80,
+      "blood_sugar": 80,
+      "steps": 6000,
+      "sleep_hours": 9.0,
+      "memo": "잘잠",
+      "id": 1
+    },
+    {
+      "user": "한승우2",
+      "date": "2026-07-21",
+      "weight": 70.0,
+      "height": 176.0,
+      "systolic": 120,
+      "diastolic": 80,
+      "blood_sugar": 80,
+      "steps": 6000,
+      "sleep_hours": 9.0,
+      "memo": "dd",
+      "id": 2
+    }
+  ],
+  "next_id": 3
+}

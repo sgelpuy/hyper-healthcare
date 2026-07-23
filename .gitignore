@@ -1,4 +1,4 @@
 venv/
-data.json
+health.db
 __pycache__/
 *.pyc

@@ -1,6 +1,5 @@
-import json
+import sqlite3
 from datetime import date, timedelta
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -34,36 +33,52 @@ class GoalIn(BaseModel):
     target_diastolic: int | None = None
 
 
-# ---------- 저장소 ----------
+# ---------- SQLite 초기화 ----------
+# 실제 테이블 정의는 schema.sql(참고용)을 그대로 옮긴 것이다.
 
-records: list[dict] = []
-next_id = 1
-goals: dict[str, dict] = {}
-
-DATA_FILE = Path("data.json")
+DB_FILE = "health.db"
 
 
-def save_records():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(
-            {"records": records, "next_id": next_id, "goals": goals},
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user TEXT NOT NULL,
+                date TEXT NOT NULL,
+                weight REAL NOT NULL,
+                height REAL NOT NULL,
+                systolic INTEGER NOT NULL,
+                diastolic INTEGER NOT NULL,
+                blood_sugar INTEGER NOT NULL,
+                steps INTEGER DEFAULT 0,
+                sleep_hours REAL DEFAULT 0.0,
+                memo TEXT DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_records_user ON records(user)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_records_date ON records(date)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS goals (
+                user TEXT PRIMARY KEY,
+                target_weight REAL,
+                target_systolic INTEGER,
+                target_diastolic INTEGER
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
 
 
-def load_records():
-    global records, next_id, goals
-    if DATA_FILE.exists():
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            records = data.get("records", [])
-            next_id = data.get("next_id", 1)
-            goals = data.get("goals", {})
+init_db()  # 서버 시작 시 한 번 호출
 
 
-load_records()  # 서버 시작 시 파일에서 복원
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 # ---------- 헬스케어 계산 로직 ----------
@@ -161,82 +176,155 @@ def read_root():
 
 @app.post("/records")
 def create_record(record: RecordIn):
-    global next_id
-    new_record = record.model_dump()
-    new_record["id"] = next_id
-    next_id += 1
-    records.append(new_record)
-    save_records()
-    return enrich(new_record)
+    data = record.model_dump()
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO records
+                (user, date, weight, height, systolic, diastolic, blood_sugar, steps, sleep_hours, memo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data["user"], data["date"], data["weight"], data["height"],
+                data["systolic"], data["diastolic"], data["blood_sugar"],
+                data["steps"], data["sleep_hours"], data["memo"],
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM records WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return enrich(dict(row))
+    finally:
+        conn.close()
 
 
 @app.get("/records")
 def list_records(user: str | None = None):
-    target = records
-    if user is not None:
-        target = [r for r in records if r["user"] == user]
-    return {"count": len(target), "records": [enrich(r) for r in target]}
+    conn = get_conn()
+    try:
+        if user is not None:
+            rows = conn.execute("SELECT * FROM records WHERE user = ?", (user,)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM records").fetchall()
+        target = [dict(r) for r in rows]
+        return {"count": len(target), "records": [enrich(r) for r in target]}
+    finally:
+        conn.close()
 
 
 @app.get("/records/{record_id}")
 def get_record(record_id: int):
-    for r in records:
-        if r["id"] == record_id:
-            return enrich(r)
-    raise HTTPException(status_code=404, detail="record not found")
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="record not found")
+        return enrich(dict(row))
+    finally:
+        conn.close()
 
 
 @app.put("/records/{record_id}")
 def update_record(record_id: int, record: RecordIn):
-    for i, r in enumerate(records):
-        if r["id"] == record_id:
-            updated = record.model_dump()
-            updated["id"] = record_id
-            records[i] = updated
-            save_records()
-            return enrich(updated)
-    raise HTTPException(status_code=404, detail="record not found")
+    data = record.model_dump()
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE records
+            SET user = ?, date = ?, weight = ?, height = ?, systolic = ?,
+                diastolic = ?, blood_sugar = ?, steps = ?, sleep_hours = ?, memo = ?
+            WHERE id = ?
+            """,
+            (
+                data["user"], data["date"], data["weight"], data["height"],
+                data["systolic"], data["diastolic"], data["blood_sugar"],
+                data["steps"], data["sleep_hours"], data["memo"], record_id,
+            ),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="record not found")
+        row = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
+        return enrich(dict(row))
+    finally:
+        conn.close()
 
 
 @app.delete("/records/{record_id}")
 def delete_record(record_id: int):
-    for i, r in enumerate(records):
-        if r["id"] == record_id:
-            deleted = records.pop(i)
-            save_records()
-            return {"deleted": enrich(deleted)}
-    raise HTTPException(status_code=404, detail="record not found")
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="record not found")
+        conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
+        conn.commit()
+        return {"deleted": enrich(dict(row))}
+    finally:
+        conn.close()
 
 
 # ---------- 검색 · 통계 · 주간 리포트 ----------
 
 @app.get("/search")
 def search_records(start: str, end: str, user: str | None = None):
-    target = records
-    if user is not None:
-        target = [r for r in target if r["user"] == user]
-    filtered = [r for r in target if start <= r["date"] <= end]
-    return {"count": len(filtered), "records": [enrich(r) for r in filtered]}
+    conn = get_conn()
+    try:
+        if user is not None:
+            rows = conn.execute(
+                "SELECT * FROM records WHERE date BETWEEN ? AND ? AND user = ?",
+                (start, end, user),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM records WHERE date BETWEEN ? AND ?",
+                (start, end),
+            ).fetchall()
+        filtered = [dict(r) for r in rows]
+        return {"count": len(filtered), "records": [enrich(r) for r in filtered]}
+    finally:
+        conn.close()
 
 
 @app.get("/stats")
 def get_stats(user: str | None = None):
-    target = records
-    if user is not None:
-        target = [r for r in target if r["user"] == user]
-    if not target:
-        return {"count": 0}
+    conn = get_conn()
+    try:
+        if user is not None:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count, AVG(weight) AS avg_weight, AVG(systolic) AS avg_systolic,
+                       AVG(diastolic) AS avg_diastolic, AVG(blood_sugar) AS avg_blood_sugar,
+                       AVG(steps) AS avg_steps, AVG(sleep_hours) AS avg_sleep_hours
+                FROM records WHERE user = ?
+                """,
+                (user,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count, AVG(weight) AS avg_weight, AVG(systolic) AS avg_systolic,
+                       AVG(diastolic) AS avg_diastolic, AVG(blood_sugar) AS avg_blood_sugar,
+                       AVG(steps) AS avg_steps, AVG(sleep_hours) AS avg_sleep_hours
+                FROM records
+                """
+            ).fetchone()
 
-    count = len(target)
-    return {
-        "count": count,
-        "avg_weight": round(sum(r["weight"] for r in target) / count, 1),
-        "avg_systolic": round(sum(r["systolic"] for r in target) / count, 1),
-        "avg_diastolic": round(sum(r["diastolic"] for r in target) / count, 1),
-        "avg_blood_sugar": round(sum(r["blood_sugar"] for r in target) / count, 1),
-        "avg_steps": round(sum(r["steps"] for r in target) / count, 1),
-        "avg_sleep_hours": round(sum(r["sleep_hours"] for r in target) / count, 1),
-    }
+        if row["count"] == 0:
+            return {"count": 0}
+
+        return {
+            "count": row["count"],
+            "avg_weight": round(row["avg_weight"], 1),
+            "avg_systolic": round(row["avg_systolic"], 1),
+            "avg_diastolic": round(row["avg_diastolic"], 1),
+            "avg_blood_sugar": round(row["avg_blood_sugar"], 1),
+            "avg_steps": round(row["avg_steps"], 1),
+            "avg_sleep_hours": round(row["avg_sleep_hours"], 1),
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/weekly-report")
@@ -246,15 +334,19 @@ def weekly_report(user: str):
     last_week_start = today - timedelta(days=13)
     last_week_end = today - timedelta(days=7)
 
-    def avg_weight_in_range(start_d, end_d):
-        rs = [
-            r for r in records
-            if r["user"] == user and start_d <= date.fromisoformat(r["date"]) <= end_d
-        ]
-        return round(sum(r["weight"] for r in rs) / len(rs), 1) if rs else None
+    conn = get_conn()
+    try:
+        def avg_weight_in_range(start_d, end_d):
+            row = conn.execute(
+                "SELECT AVG(weight) AS avg_weight FROM records WHERE user = ? AND date BETWEEN ? AND ?",
+                (user, start_d.isoformat(), end_d.isoformat()),
+            ).fetchone()
+            return round(row["avg_weight"], 1) if row["avg_weight"] is not None else None
 
-    this_week_avg = avg_weight_in_range(this_week_start, today)
-    last_week_avg = avg_weight_in_range(last_week_start, last_week_end)
+        this_week_avg = avg_weight_in_range(this_week_start, today)
+        last_week_avg = avg_weight_in_range(last_week_start, last_week_end)
+    finally:
+        conn.close()
     change = (
         round(this_week_avg - last_week_avg, 1)
         if this_week_avg is not None and last_week_avg is not None
@@ -273,56 +365,86 @@ def weekly_report(user: str):
 
 @app.post("/goals")
 def set_goal(goal: GoalIn):
-    goals[goal.user] = goal.model_dump()
-    save_records()
-    return goals[goal.user]
+    data = goal.model_dump()
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO goals (user, target_weight, target_systolic, target_diastolic)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user) DO UPDATE SET
+                target_weight = excluded.target_weight,
+                target_systolic = excluded.target_systolic,
+                target_diastolic = excluded.target_diastolic
+            """,
+            (data["user"], data["target_weight"], data["target_systolic"], data["target_diastolic"]),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM goals WHERE user = ?", (goal.user,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
 
 
 @app.get("/goals/{user}")
 def get_goal(user: str):
-    if user not in goals:
-        raise HTTPException(status_code=404, detail="goal not found")
-    return goals[user]
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM goals WHERE user = ?", (user,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="goal not found")
+        return dict(row)
+    finally:
+        conn.close()
 
 
 @app.get("/goals/{user}/progress")
 def get_goal_progress(user: str):
-    if user not in goals:
-        raise HTTPException(status_code=404, detail="goal not found")
+    conn = get_conn()
+    try:
+        goal_row = conn.execute("SELECT * FROM goals WHERE user = ?", (user,)).fetchone()
+        if goal_row is None:
+            raise HTTPException(status_code=404, detail="goal not found")
+        goal = dict(goal_row)
 
-    goal = goals[user]
-    user_records = [r for r in records if r["user"] == user]
-    if not user_records:
-        return {"user": user, "message": "기록이 없어 달성률을 계산할 수 없습니다."}
+        first_row = conn.execute(
+            "SELECT * FROM records WHERE user = ? ORDER BY date ASC, id ASC LIMIT 1", (user,)
+        ).fetchone()
+        if first_row is None:
+            return {"user": user, "message": "기록이 없어 달성률을 계산할 수 없습니다."}
+        latest_row = conn.execute(
+            "SELECT * FROM records WHERE user = ? ORDER BY date DESC, id DESC LIMIT 1", (user,)
+        ).fetchone()
 
-    sorted_records = sorted(user_records, key=lambda r: r["date"])
-    first_weight = sorted_records[0]["weight"]
-    latest = sorted_records[-1]
+        first_weight = first_row["weight"]
+        latest = dict(latest_row)
 
-    result = {"user": user}
+        result = {"user": user}
 
-    if goal.get("target_weight") is not None:
-        target = goal["target_weight"]
-        current = latest["weight"]
-        if first_weight == target:
-            rate = 100.0
-        else:
-            rate = (first_weight - current) / (first_weight - target) * 100
-            rate = max(0.0, min(100.0, round(rate, 1)))
-        result["weight_progress_pct"] = rate
-        result["current_weight"] = current
-        result["target_weight"] = target
+        if goal.get("target_weight") is not None:
+            target = goal["target_weight"]
+            current = latest["weight"]
+            if first_weight == target:
+                rate = 100.0
+            else:
+                rate = (first_weight - current) / (first_weight - target) * 100
+                rate = max(0.0, min(100.0, round(rate, 1)))
+            result["weight_progress_pct"] = rate
+            result["current_weight"] = current
+            result["target_weight"] = target
 
-    if goal.get("target_systolic") is not None and goal.get("target_diastolic") is not None:
-        achieved = (
-            latest["systolic"] <= goal["target_systolic"]
-            and latest["diastolic"] <= goal["target_diastolic"]
-        )
-        result["bp_achieved"] = achieved
-        result["current_bp"] = f'{latest["systolic"]}/{latest["diastolic"]}'
-        result["target_bp"] = f'{goal["target_systolic"]}/{goal["target_diastolic"]}'
+        if goal.get("target_systolic") is not None and goal.get("target_diastolic") is not None:
+            achieved = (
+                latest["systolic"] <= goal["target_systolic"]
+                and latest["diastolic"] <= goal["target_diastolic"]
+            )
+            result["bp_achieved"] = achieved
+            result["current_bp"] = f'{latest["systolic"]}/{latest["diastolic"]}'
+            result["target_bp"] = f'{goal["target_systolic"]}/{goal["target_diastolic"]}'
 
-    return result
+        return result
+    finally:
+        conn.close()
 
 
 @app.get("/web", response_class=HTMLResponse)
